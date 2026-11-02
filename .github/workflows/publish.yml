@@ -1,0 +1,196 @@
+# Builds the Proton OS APT repository from the .deb files attached to the releases of the apps
+# in apps.txt, signs it, and publishes it on GitHub Pages:
+#   https://protonos-linux.github.io/apt
+#
+# Runs every hour (it stops early when no app has a new release), after a change to this
+# repository, or by hand (Actions → Publish repository → Run workflow) right after a release.
+#
+# Needs the repository secret APT_SIGNING_KEY: the ASCII-armored private signing key (see
+# README.md). Its public half is published as proton-os.asc and in the keyring package.
+name: Publish repository
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  SITE_URL: https://protonos-linux.github.io/apt
+  # How many recent releases of each app stay in the repository (older ones can be
+  # reinstalled with apt to go back a version).
+  KEEP_RELEASES: 3
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl jq gnupg apt-utils dpkg-dev
+      - uses: actions/checkout@v4
+
+      - name: Find the release files
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          : > assets.txt
+          grep -v '^\s*\(#\|$\)' apps.txt | while read -r repo; do
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$repo/releases?per_page=20" |
+            jq -r --argjson n "$KEEP_RELEASES" \
+              '[.[] | select(.draft == false and .prerelease == false)][:$n][]
+               | .assets[] | select(.name | endswith(".deb"))
+               | "\(.id) \(.browser_download_url)"' >> assets.txt
+          done
+          # What this build would contain: the release files plus this repository's own files.
+          state=$( (cat assets.txt; cat apps.txt keyring/*; echo "$GITHUB_SHA") | sha256sum | cut -c1-16)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          old=$(curl -fsSL "$SITE_URL/state.txt" 2>/dev/null || true)
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$old" = "$state" ]; then
+            echo "Nothing new since the last publish."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          cat assets.txt
+
+      - name: Import the signing key
+        if: steps.check.outputs.changed == 'true'
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          set -eu
+          if [ -z "$APT_SIGNING_KEY" ]; then
+            echo "The APT_SIGNING_KEY secret is missing. See README.md." >&2
+            exit 1
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+          fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/ {print $10; exit}')
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "KEY_FPR=$fpr" >> "$GITHUB_ENV"
+          echo "Signing with $fpr"
+
+      - name: Build the repository
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -eu
+          site=site
+          mkdir -p "$site/pool/main" "$site/dists/stable/main/binary-amd64"
+
+          # The apps' packages, downloaded from their releases.
+          while read -r id url; do
+            [ -n "$url" ] || continue
+            curl -fsSL -o "$site/pool/main/$(basename "$url")" "$url"
+          done < assets.txt
+
+          # The keyring package: the public key, the repository entry for apt, and automatic
+          # updates through unattended-upgrades.
+          kv=$(cat keyring/VERSION)
+          pkg="$RUNNER_TEMP/keyring"
+          mkdir -p "$pkg/DEBIAN" "$pkg/usr/share/keyrings" "$pkg/etc/apt/sources.list.d" "$pkg/etc/apt/apt.conf.d"
+          gpg --batch --export "$KEY_FPR" > "$pkg/usr/share/keyrings/proton-os-archive-keyring.gpg"
+          install -m 644 keyring/proton-os.sources "$pkg/etc/apt/sources.list.d/proton-os.sources"
+          install -m 644 keyring/52proton-os-unattended-upgrades "$pkg/etc/apt/apt.conf.d/52proton-os-unattended-upgrades"
+          printf '/etc/apt/sources.list.d/proton-os.sources\n/etc/apt/apt.conf.d/52proton-os-unattended-upgrades\n' > "$pkg/DEBIAN/conffiles"
+          cat > "$pkg/DEBIAN/control" <<CONTROL
+          Package: proton-os-archive-keyring
+          Version: $kv
+          Architecture: all
+          Maintainer: Proton OS <support@protonos.org>
+          Section: misc
+          Priority: optional
+          Homepage: https://www.protonos.org
+          Description: Proton OS package repository and its signing key
+           Adds the Proton OS package repository (apps made for Proton OS, such as
+           Proton Security) to apt and KDE Discover, with the key its updates are
+           signed with. Updates from it install automatically when unattended-upgrades
+           is on.
+          CONTROL
+          dpkg-deb --root-owner-group --build "$pkg" "$site/pool/main/proton-os-archive-keyring_${kv}_all.deb"
+          cp "$site/pool/main/proton-os-archive-keyring_${kv}_all.deb" "$site/proton-os-archive-keyring.deb"
+
+          # Package index and signed release file.
+          cd "$site"
+          apt-ftparchive packages pool > dists/stable/main/binary-amd64/Packages
+          gzip -9kn dists/stable/main/binary-amd64/Packages
+          xz -9k dists/stable/main/binary-amd64/Packages
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin="Proton OS" \
+            -o APT::FTPArchive::Release::Label="Proton OS" \
+            -o APT::FTPArchive::Release::Suite=stable \
+            -o APT::FTPArchive::Release::Codename=stable \
+            -o APT::FTPArchive::Release::Architectures=amd64 \
+            -o APT::FTPArchive::Release::Components=main \
+            -o APT::FTPArchive::Release::Description="Apps made for Proton OS" \
+            release dists/stable > "$RUNNER_TEMP/Release"
+          mv "$RUNNER_TEMP/Release" dists/stable/Release
+          gpg --batch --yes --local-user "$KEY_FPR" --clearsign -o dists/stable/InRelease dists/stable/Release
+          gpg --batch --yes --local-user "$KEY_FPR" --armor --detach-sign -o dists/stable/Release.gpg dists/stable/Release
+          gpg --batch --armor --export "$KEY_FPR" > proton-os.asc
+          echo "$KEY_FPR" > fingerprint.txt
+          echo "${{ steps.check.outputs.state }}" > state.txt
+          cp ../README.md README.md
+          cat > index.html <<HTML
+          <!doctype html><meta charset="utf-8"><title>Proton OS package repository</title>
+          <h1>Proton OS package repository</h1>
+          <p>Apps made for <a href="https://www.protonos.org">Proton OS</a>. Already set up on Proton OS.
+          On another Debian 13 system with KDE Plasma:</p>
+          <pre>wget $SITE_URL/proton-os-archive-keyring.deb
+          sudo apt install ./proton-os-archive-keyring.deb
+          sudo apt update
+          sudo apt install proton-security</pre>
+          <p>Signing key fingerprint: <code>$KEY_FPR</code></p>
+          <p><a href="https://github.com/ProtonOS-Linux/apt">How it works</a></p>
+          HTML
+          find . -type f | sort
+
+      - name: Check the repository with apt
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -eu
+          # Point apt at the built folder and make sure it accepts the signature and finds the
+          # packages, exactly as a computer would.
+          root="$RUNNER_TEMP/aptcheck"
+          mkdir -p "$root/etc/apt/sources.list.d" "$root/etc/apt/preferences.d" "$root/var/lib/apt/lists/partial" "$root/var/cache/apt/archives/partial" "$root/var/lib/dpkg"
+          touch "$root/var/lib/dpkg/status"
+          gpg --batch --export "$KEY_FPR" > "$root/key.gpg"
+          echo "deb [signed-by=$root/key.gpg] file://$PWD/site stable main" > "$root/etc/apt/sources.list"
+          opts="-o Dir=$root -o Dir::State::status=$root/var/lib/dpkg/status -o APT::Architecture=amd64 -o APT::Sandbox::User=root"
+          apt-get $opts update
+          apt-cache $opts policy proton-security proton-os-archive-keyring
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.check.outputs.changed == 'true'
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,8 @@
+# Proton OS package repository: apps made for Proton OS (Proton Security…).
+# Installed by the proton-os-archive-keyring package. https://www.protonos.org
+Types: deb
+URIs: https://protonos-linux.github.io/apt
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/proton-os-archive-keyring.gpg

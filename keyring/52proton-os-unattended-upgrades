@@ -1,0 +1,5 @@
+// Install updates of Proton OS apps automatically, together with Debian's security
+// updates (when unattended-upgrades is on). Installed by proton-os-archive-keyring.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Proton OS,label=Proton OS";
+};

@@ -39,7 +39,8 @@ jobs:
       - name: Install tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl jq gnupg apt-utils dpkg-dev
+          apt-get install -y --no-install-recommends ca-certificates curl jq gnupg apt-utils dpkg-dev \
+            appstream appstream-generator librsvg2-common xz-utils
       - uses: actions/checkout@v4
 
       - name: Find the release files
@@ -131,6 +132,12 @@ jobs:
           apt-ftparchive packages pool > dists/stable/main/binary-amd64/Packages
           gzip -9kn dists/stable/main/binary-amd64/Packages
           xz -9k dists/stable/main/binary-amd64/Packages
+
+          # AppStream (DEP-11) data, so KDE Discover lists the apps with their icons and
+          # descriptions and finds them in search. Must come before the Release file, which
+          # has to list these files. See scripts/make-dep11.sh.
+          mkdir "$RUNNER_TEMP/dep11"
+          "$GITHUB_WORKSPACE/scripts/make-dep11.sh" . "$RUNNER_TEMP/dep11"
           apt-ftparchive \
             -o APT::FTPArchive::Release::Origin="Proton OS" \
             -o APT::FTPArchive::Release::Label="Proton OS" \
@@ -175,6 +182,13 @@ jobs:
           opts="-o Dir=$root -o Dir::State::status=$root/var/lib/dpkg/status -o APT::Architecture=amd64 -o APT::Sandbox::User=root"
           apt-get $opts update
           apt-cache $opts policy proton-security proton-ip-scanner proton-os-archive-keyring
+          # The appstream package's apt hook (installed above) makes apt download the DEP-11
+          # data; Discover depends on it, so fail if apt did not accept it.
+          if ! ls "$root"/var/lib/apt/lists/*_dep11_Components-amd64.yml* > /dev/null 2>&1; then
+            echo "apt did not download the AppStream data: the apps would not show in Discover" >&2
+            exit 1
+          fi
+          echo "apt downloaded the AppStream data for Discover."
 
       - uses: actions/upload-pages-artifact@v3
         if: steps.check.outputs.changed == 'true'

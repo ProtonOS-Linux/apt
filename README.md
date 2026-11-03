@@ -51,8 +51,9 @@ There is no server to maintain. [`publish.yml`](.github/workflows/publish.yml) r
 1. It reads [`apps.txt`](apps.txt) and downloads the `.deb` files attached to the last 3 releases of each app
    (so you can go back a version with `apt install proton-security=<version>`).
 2. It builds the keyring package from [`keyring/`](keyring).
-3. It writes the package index (`apt-ftparchive`), signs it with the Proton OS key (`InRelease`, `Release.gpg`),
-   checks the result with a real `apt-get update`, and publishes it on GitHub Pages.
+3. It writes the package index (`apt-ftparchive`) and the AppStream data for KDE Discover
+   ([`scripts/make-dep11.sh`](scripts/make-dep11.sh)), signs it with the Proton OS key (`InRelease`,
+   `Release.gpg`), checks the result with a real `apt-get update`, and publishes it on GitHub Pages.
 
 It runs **every hour** (and stops early when nothing changed), on every change to this repository, and on demand.
 So a new app release reaches computers within about an hour. To publish it right away: *Actions → Publish
@@ -62,6 +63,20 @@ repository → Run workflow*.
 
 Publish the release in the app's repository as usual (its own workflow attaches the `.deb`). Nothing else is
 needed here. To add another app, add its repository to `apps.txt`; its releases must have a `.deb` attached.
+
+### Showing up in KDE Discover
+
+Discover only lists a package as an app (with its icon, description and screenshots, and in search) when the
+repository publishes AppStream data for it, in `dists/stable/main/dep11/`. The workflow builds that data from
+the metainfo file inside each app's `.deb` (`/usr/share/metainfo/<app id>.metainfo.xml`, kept in the app's
+`packaging/` folder). An app without one still installs with apt, but Discover hides it. The build fails if a
+package has a metainfo file that produces no entry, so an app can't quietly disappear from Discover.
+
+On a computer, `apt update` downloads the data; Discover picks it up the next time it opens. To check by hand:
+`sudo apt update && appstreamcli get org.protonos.ProtonSecurity`.
+
+To add a new app to Discover, give it a metainfo file (copy one of the existing apps') and validate it in its
+CI with `appstreamcli validate`. Nothing needs changing here.
 
 ### The signing key
 

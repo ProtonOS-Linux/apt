@@ -1,3 +1,4 @@
 # GitHub repositories whose releases are published in the Proton OS package repository.
 # One per line (owner/name). Every .deb attached to their latest releases is included.
 ProtonOS-Linux/proton-security-app
+ProtonOS-Linux/proton-network-scanner

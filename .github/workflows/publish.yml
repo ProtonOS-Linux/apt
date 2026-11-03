@@ -155,7 +155,7 @@ jobs:
           <pre>wget $SITE_URL/proton-os-archive-keyring.deb
           sudo apt install ./proton-os-archive-keyring.deb
           sudo apt update
-          sudo apt install proton-security</pre>
+          sudo apt install proton-security proton-ip-scanner</pre>
           <p>Signing key fingerprint: <code>$KEY_FPR</code></p>
           <p><a href="https://github.com/ProtonOS-Linux/apt">How it works</a></p>
           HTML
@@ -174,7 +174,7 @@ jobs:
           echo "deb [signed-by=$root/key.gpg] file://$PWD/site stable main" > "$root/etc/apt/sources.list"
           opts="-o Dir=$root -o Dir::State::status=$root/var/lib/dpkg/status -o APT::Architecture=amd64 -o APT::Sandbox::User=root"
           apt-get $opts update
-          apt-cache $opts policy proton-security proton-os-archive-keyring
+          apt-cache $opts policy proton-security proton-ip-scanner proton-os-archive-keyring
 
       - uses: actions/upload-pages-artifact@v3
         if: steps.check.outputs.changed == 'true'

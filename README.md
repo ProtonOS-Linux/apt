@@ -8,6 +8,7 @@ KDE Discover, and get their updates the same way as every other update on the sy
 | Package | What it is |
 |---|---|
 | `proton-security` | [Proton Security](https://github.com/ProtonOS-Linux/proton-security-app), the security center |
+| `proton-ip-scanner` | [Proton IP Scanner](https://github.com/ProtonOS-Linux/proton-network-scanner), the network and vulnerability scanner |
 | `proton-os-archive-keyring` | Adds this repository to apt, with the key its packages are signed with |
 
 ## Add it to a computer
@@ -18,7 +19,7 @@ Proton OS has it set up already. On another Debian 13 system with KDE Plasma:
 wget https://protonos-linux.github.io/apt/proton-os-archive-keyring.deb
 sudo apt install ./proton-os-archive-keyring.deb
 sudo apt update
-sudo apt install proton-security
+sudo apt install proton-security proton-ip-scanner
 ```
 
 The signing key's fingerprint is on the [repository's home page](https://protonos-linux.github.io/apt) and in
